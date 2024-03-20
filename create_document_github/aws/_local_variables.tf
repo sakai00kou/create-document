@@ -11,7 +11,7 @@ locals {
 # GitHub Actions用ローカル変数
 #-----------------------------------------------------------------------------------------------------------------------
 locals {
-  github_account_name  = "sakai00kou"
+  github_account_name  = "githubaccountname"
   github_repository    = "create-document"
   github_id_provider   = "github-create-document-provider"
   github_iam_role_name = "github-create-document-role"
