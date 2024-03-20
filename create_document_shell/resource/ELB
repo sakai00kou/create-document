@@ -1,0 +1,152 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# ELB情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+LBARN_TMP=".lbarn.tmp"
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# ELB" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## ロードバランサ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws elbv2 describe-load-balancers --region ${REGION_LIST} | jq -r '.LoadBalancers[] |
+  [
+    .LoadBalancerName,
+    .DNSName,
+    .VpcId,
+    .State.Code,
+    ([.AvailabilityZones[].ZoneName] | @csv),
+    .Type,
+    .LoadBalancerArn
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|DNS名|状態|VPC ID|AZ|タイプ|ARN|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # リスナー
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # LoadBalancerArnのリスト作成
+  aws elbv2 describe-load-balancers --region ${REGION_LIST} | jq -r '.LoadBalancers[] | [.LoadBalancerArn] | @tsv' | sort >| ${LBARN_TMP}
+
+  while read LBARN_LIST
+  do
+    LB_NAME=$(echo ${LBARN_LIST} | cut -d"/" -f3)
+    # リージョンごとの表題【編集可】
+    echo "### ${LB_NAME} リスナー (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws elbv2 describe-listeners --load-balancer-arn ${LBARN_LIST} --region ${REGION_LIST} | jq -r '.Listeners[] |
+    [
+      (.LoadBalancerArn | split("/") | .[-2]), # ロードバランサ名
+      .Protocol, # プロトコル
+      .Port, # ポート
+      .DefaultActions[].Type, # ターゲットグループアクション
+      (.DefaultActions[].TargetGroupArn // "-" | split("/") | .[-2]), # ターゲットグループ名
+      .SslPolicy // "-", # SSLポリシー
+      .ListenerArn # リスナーARN
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ロードバランサ名|プロトコル|ポート|ターゲットグループアクション|ターゲットグループ名|セキュリティポリシー|リスナーARN|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${LBARN_TMP}
+
+  # -----------------------------------------------------------------------------
+  # ターゲットグループ
+  # -----------------------------------------------------------------------------
+  # リージョンごとの表題【編集可】
+  echo "## TargetGroup (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws elbv2 describe-target-groups --region ${REGION_LIST} | jq -r '.TargetGroups[] |
+  [
+    .TargetGroupName,
+    .TargetGroupArn,
+    .Port,
+    .Protocol,
+    .TargetType,
+    (.LoadBalancerArns[] // "-" | split("/") | .[-2]),
+    .VpcId
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|ARN|ポート|プロトコル|ターゲットタイプ|ロードバランサ|VPC ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${LBARN_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

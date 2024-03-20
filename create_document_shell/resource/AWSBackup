@@ -1,0 +1,121 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# AWS Backup情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# BACKUPPLAN_TMP  ：バックアッププランリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+BACKUPPLAN_TMP=".backupplan.tmp"
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# AWS Backup" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## バックアッププラン (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws backup list-backup-plans --region ${REGION_LIST} | jq -r '.BackupPlansList[] |
+  [
+    .BackupPlanName, # バックアッププラン名
+    .BackupPlanId, # バックアッププランID
+    .BackupPlanArn # バックアッププランARN
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|バックアッププラン名|バックアッププランID|バックアッププランARN|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # バックアップツール
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # バックアッププランのリスト作成【編集可】
+  aws backup list-backup-plans --region ${REGION_LIST} | jq -r '.BackupPlansList[] | [.BackupPlanName, .BackupPlanId] | @tsv' | sort >| ${BACKUPPLAN_TMP}
+
+  while read BACKUPPLAN_LIST
+  do
+    # バックアッププラン名の取得【編集可】
+    BACKUPPLAN_NAME=$(echo ${BACKUPPLAN_LIST} | cut -d" " -f1)
+    BACKUPPLAN_ID=$(echo ${BACKUPPLAN_LIST} | cut -d" " -f2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${BACKUPPLAN_NAME} バックアップルール (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws backup get-backup-plan --backup-plan-id ${BACKUPPLAN_ID} --region ${REGION_LIST} | jq -r '.BackupPlan.Rules[] |
+    [
+      .RuleName, # ルール名
+      .TargetBackupVaultName, # バックアップボールト
+      .ScheduleExpression, # 頻度
+      .StartWindowMinutes, # 次の時間内に開始
+      .CompletionWindowMinutes, # 次の時間内に終了
+      .Lifecycle.DeleteAfterDays # 保管期間
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ルール名|バックアップボールト|頻度|次の期間内に開始(分)|次の期間内に終了(分)|保管期間(日)|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${BACKUPPLAN_TMP}
+
+  echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${BACKUPPLAN_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

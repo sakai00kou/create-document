@@ -1,0 +1,135 @@
+version: 0.2
+
+env:
+  git-credential-helper: yes
+
+phases:
+  install:
+    on-failure: ABORT
+    commands:
+      # jqとAWS CLI v2のインストール
+      - apk --update add jq binutils
+      - wget -O /etc/apk/keyssgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub
+      - wget https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VERSION}/glibc-${GLIBC_VERSION}.apk
+      - wget https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VERSION}/glibc-bin-${GLIBC_VERSION}.apk
+      - wget https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VERSION}/glibc-i18n-${GLIBC_VERSION}.apk
+      - |
+        apk add --no-cache --force-overwrite --allow-untrusted \
+        glibc-${GLIBC_VERSION}.apk \
+        glibc-bin-${GLIBC_VERSION}.apk \
+        glibc-i18n-${GLIBC_VERSION}.apk
+      - /usr/glibc-compat/bin/localedef -i en_US -f UTF-8 en_US.UTF-8
+      - ln -sf /usr/glibc-compat/lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+      - wget -O awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+      - unzip awscliv2.zip 2>&1 > /dev/null
+      - aws/install
+      # 不要なファイルの削除
+      - rm -rf aws awscliv2.zip glibc-*.apk
+      # defaultプロファイルの設定
+      - aws configure set region ${REGION}
+      # クロスアカウントアクセス用のクレデンシャルの設定
+      # クロスアカウントで複数ドキュメントの情報を取得する場合に実施
+      # --- ここから ---
+      # - aws configure set role_arn arn:aws:iam::${CROSS_ACCOUNT_A_ACCOUNT_ID}:role/${CROSS_ACCOUNT_A_IAM_ROLE_NAME} --profile ${CROSS_ACCOUNT_A_PROFILE_NAME}
+      # - aws configure set credential_source EcsContainer --profile ${CROSS_ACCOUNT_A_PROFILE_NAME}
+      # --- ここまで ---
+  pre_build:
+    on-failure: ABORT
+    commands:
+      # ドキュメント作成とコミット処理
+      # ドキュメント作成シェルの実行
+      - |
+        while read RESOURCE
+        do
+          bash create_document.sh -o "${SRC_DIR}/${BASIS_NAME}/${ENVIRONMENT_NAME}" ${RESOURCE}
+        done < resource_list/${BASIS_NAME}_list
+      # インデックスファイル作成シェルの実行
+      - bash contents.sh ${BASIS_NAME} ${ENVIRONMENT_NAME} ${PROTOCOL}://${S3_BUCKET_NAME}.s3-website-${REGION}.amazonaws.com/ ${PROJ_NAME}
+      # クロスアカウントで複数ドキュメントの情報を取得する場合に実施
+      # --- ここから ---
+      # - export AWS_PROFILE=${CROSS_ACCOUNT_A_PROFILE_NAME}
+      # - |
+      #   while read RESOURCE
+      #   do
+      #     bash create_document.sh -o "${SRC_DIR}/${CROSS_ACCOUNT_A_BASIS_NAME}/${CROSS_ACCOUNT_A_ENVIRONMENT_NAME}" ${RESOURCE}
+      #   done < resource_list/${CROSS_ACCOUNT_A_BASIS_NAME}_list
+      # # インデックスファイル作成シェルの実行
+      # - bash contents.sh ${CROSS_ACCOUNT_A_BASIS_NAME} ${CROSS_ACCOUNT_A_ENVIRONMENT_NAME} ${PROTOCOL}://${S3_BUCKET_NAME}.s3-website-${REGION}.amazonaws.com/ ${PROJ_NAME}
+      # - export AWS_PROFILE=default
+      # --- ここまで ---
+      # 更新ファイルがある場合にのみコミット
+      - git add -N .
+      - COUNT=$(git diff --name-only | wc -l)
+      - |
+        if [ ${COUNT} -gt 0 ]; then
+          git config --global user.email w${MAIL_ADDRESS}
+          git config --global user.name ${USER_NAME}
+          git switch ${BRANCH_NAME}
+          git add -u
+          git commit -m "CodeBuild $(TZ=Asia/Tokyo date '+%Y/%m/%d %H:%M:%S')"
+          git push origin ${BRANCH_NAME}
+        fi
+  build:
+    on-failure: ABORT
+    commands:
+      # JekyllインストールとJekyllに必要なファイルの作成
+      # Gemfileの作成
+      - cd /srv/jekyll
+      - |
+        cat << _EOF_ > Gemfile
+        source "https://rubygems.org"
+        gem 'github-pages', group: :jekyll_plugins
+        _EOF_
+      # _config.ymlの作成
+      - |
+        cat << _EOF_ > _config.yml
+        title: ${REPOSITORY}
+        url: ${PROTOCOL}://${S3_BUCKET_NAME}.s3-website-${REGION}.amazonaws.com
+        baseurl: /
+        theme: jekyll-theme-primer
+        _EOF_
+      # Bundleのインストール
+      - chown jekyll:jekyll Gemfile _config.yml
+      - bundle add webrick
+      # jekyll-theme-primer用default.htmlの作成
+      # jekyll-theme-primerのデフォルトレイアウトの場合、GitHubのリポジトリ名を指定しないとエラーとなるためカスタムレイアウトを作成
+      - mkdir -p ${CODEBUILD_SRC_DIR}/${SRC_DIR}/_layouts
+      - |
+        cat << _EOF_ > ${CODEBUILD_SRC_DIR}/${SRC_DIR}/_layouts/default.html
+        <!DOCTYPE html>
+        <html lang="{{ site.lang | default: "en-US" }}">
+          <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="X-UA-Compatible" content="IE=edge">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+
+            <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
+            {% include head-custom.html %}
+          </head>
+          <body>
+            <div class="container-lg px-3 my-5 markdown-body">
+              {% if site.title and site.title != page.title %}
+              <h1><a href="{{ "/" | absolute_url }}">{{ site.title }}</a></h1>
+              {% endif %}
+
+              {{ content }}
+
+            </div>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+            <script>anchors.add();</script>
+          </body>
+        </html>
+        _EOF_
+      - chown -R jekyll:jekyll ${CODEBUILD_SRC_DIR}/${SRC_DIR}/_layouts
+  post_build:
+    on-failure: ABORT
+    commands:
+      # ドキュメント表示用HTMLファイルの作成とS3へのアップロード
+      # ドキュメントのビルド
+      - |
+        bundle exec jekyll build \
+          --config /srv/jekyll/_config.yml \
+          --source ${CODEBUILD_SRC_DIR}/${SRC_DIR} \
+          --destination /srv/jekyll/_site
+      # S3へのアップロード
+      - aws s3 sync /srv/jekyll/_site s3://${S3_BUCKET_NAME}/ --exclude "*.md" --delete

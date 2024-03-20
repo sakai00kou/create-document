@@ -1,0 +1,295 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# Network Firewall情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+FIREWALL_TMP=".firewall.tmp"
+RULEGROUP_TMP=".rulegroup.tmp"
+POLICY_TMP=".policy.tmp"
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# Network Firewall" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # ファイアウォールリスト取得
+  aws network-firewall list-firewalls --region ${REGION_LIST} | jq -r '.Firewalls[] | [.FirewallName] | @tsv' | sort >| ${FIREWALL_TMP}
+
+  while read FIREWALL_LIST
+  do
+    # リージョンごとの表題【編集可】
+    echo "## ファイアウォール (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws network-firewall describe-firewall --firewall-name ${FIREWALL_LIST} --region ${REGION_LIST} | jq -r '.Firewall |
+    [
+      .FirewallName, # ファイアウォール名
+      (.FirewallPolicyArn // "-" | split("/") | .[-1]), # ファイアウォールポリシー名
+      .VpcId, # VPC ID
+      (.SubnetMappings | map(.SubnetId) | join("<br>")), # サブネットID
+      .DeleteProtection, # 削除保護
+      .SubnetChangeProtection, # サブネット変更保護
+      .FirewallArn # ARN
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ファイアウォール名|ファイアウォールポリシー名|VPC ID|サブネットID|削除保護|サブネット変更保護|ARN|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${FIREWALL_TMP}
+
+  # -----------------------------------------------------------------------------
+  # ファイアウォールポリシー
+  # -----------------------------------------------------------------------------
+  # リージョンごとの表題【編集可】
+  echo "## ファイアウォールポリシー (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws network-firewall list-firewall-policies --region ${REGION_LIST} | jq -r '.FirewallPolicies[] |
+  [
+    .Name, # ファイアウォールポリシー名
+    .Arn # ARN
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ファイアウォールポリシー名|ARN|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # 基本設定
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # ポリシー名取得
+  aws network-firewall list-firewall-policies --region ${REGION_LIST} | jq -r '.FirewallPolicies[] | [.Name] | @tsv' | sort >| ${POLICY_TMP}
+
+  while read POLICY_LIST
+  do
+    # リージョンごとの表題【編集可】
+    echo "### ${POLICY_LIST} 基本設定 (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws network-firewall describe-firewall-policy --firewall-policy-name ${POLICY_LIST} --region ${REGION_LIST} | jq -r '. |
+    [
+      .FirewallPolicyResponse.FirewallPolicyName, # ファイアウォールポリシー名
+      ([.FirewallPolicy.StatelessDefaultActions[]] | .[0] | ltrimstr("aws:")), # ステートレスデフォルトアクション
+      ([.FirewallPolicy.StatelessFragmentDefaultActions[]] | .[0] | ltrimstr("aws:")) # ステートレスフラグメントデフォルトアクション
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ファイアウォールポリシー名|ステートレスデフォルトアクション|ステートレスフラグメントデフォルトアクション|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # -----------------------------------------------------------------------------
+    # ステートフルルールグループ
+    # -----------------------------------------------------------------------------
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+    # リージョンごとの表題【編集可】
+    echo "### ${POLICY_LIST} ステートフルルールグループ (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws network-firewall describe-firewall-policy --firewall-policy-name ${POLICY_LIST} --region ${REGION_LIST} | jq -r '. |
+      (.FirewallPolicy.StatefulRuleGroupReferences[].ResourceArn // "-" | split("/")[-1] | [.]) # ステートフルルールグループ名
+    | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ステートフルルールグループ名|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${POLICY_TMP}
+
+  # -----------------------------------------------------------------------------
+  # ファイアウォールルールグループ
+  # -----------------------------------------------------------------------------
+  # ルールグループ名取得
+  aws network-firewall list-rule-groups --region ${REGION_LIST} | jq -r '.RuleGroups[] | [.Arn] | @tsv' | sort >| ${RULEGROUP_TMP}
+
+  while read RULEGROUP_LIST
+  do
+    # リージョンごとの表題【編集可】
+    echo "## ファイアウォールルールグループ (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws network-firewall describe-rule-group --rule-group-arn ${RULEGROUP_LIST} --region ${REGION_LIST} | jq -r '. |
+    [
+      .RuleGroupResponse.RuleGroupName, # ルールグループ名
+      .RuleGroupResponse.Type, # タイプ
+      .RuleGroupResponse.Capacity # キャパシティ
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ルールグループ名|タイプ|キャパシティ|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # -----------------------------------------------------------------------------
+    # ステートレスルールグループ
+    # -----------------------------------------------------------------------------
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+    # ルールグループ名取得
+    RULEGROUP_NAME=$(echo ${RULEGROUP_LIST} | cut -d"/" -f 2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${RULEGROUP_NAME} (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws network-firewall describe-rule-group --rule-group-arn ${RULEGROUP_LIST} --region ${REGION_LIST} | jq -r '.RuleGroup |
+    [
+      .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].Priority, # 優先度
+      # プロトコル
+      (
+        .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.Protocols |
+        if . == 6 then
+          "TCP"
+        elif . == 17 then
+          "UDP"
+        elif . == 0 then
+          "ICMP"
+        else
+          "すべて"
+        end
+      ),
+      .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.Sources[].AddressDefinition, # 送信元
+      .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.Destinations[].AddressDefinition, # 送信先
+      # 送信元ポート（開始）
+      (
+        .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.SourcePorts |
+        if . then
+          .FromPort
+        else
+          "-"
+        end
+      ),
+      # 送信元ポート（終了）
+      (
+        .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.SourcePorts |
+        if . then
+          .ToPort
+        else
+          "-"
+        end
+      ),
+      # 送信元ポート（開始）
+      (
+        .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.DestinationPorts |
+        if . then
+          .FromPort
+        else
+          "-"
+        end
+      ),
+      # 送信元ポート（終了）
+      (
+        .RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.MatchAttributes.DestinationPorts |
+        if . then
+          .ToPort
+        else
+          "-"
+        end
+      ),
+      ([.RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.Actions[]] | .[] | select(. | test("aws:")) | ltrimstr("aws:")), # アクション
+      ([.RulesSource.StatelessRulesAndCustomActions.StatelessRules[].RuleDefinition.Actions[]] | .[] | select(. | test("aws:") | not)) # カスタムアクション
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|優先度|プロトコル|送信元IP|送信先IP|送信元ポート(開始)|送信元ポート(終了)|送信先ポート(開始)|送信先ポート(終了)|アクション|カスタムアクション|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${RULEGROUP_TMP}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${FIREWALL_TMP}
+rm -f ${RULEGROUP_TMP}
+rm -f ${POLICY_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

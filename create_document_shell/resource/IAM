@@ -1,0 +1,138 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# IAM情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# IAM" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## IAM Policy（カスタマー管理ポリシー） (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws iam list-policies --scope Local --region ${REGION_LIST} | jq -r '.Policies[] |
+  [
+    .PolicyName, # ポリシー名
+    .AttachmentCount, # アタッチ済みの許可ポリシー数
+    .PermissionsBoundaryUsageCount, # エンジンバージョン
+    .Arn, # ARN
+    .PolicyId # ポリシーID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ポリシー名|アタッチ済みの許可ポリシー数|アタッチ済みの境界ポリシー数|ARN|ポリシーID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # IAM Role
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## IAM Role (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws iam list-roles --region ${REGION_LIST} | jq -r '.Roles[] |
+  [
+    .RoleName, # ロール名
+    .Description // "-", # Description
+    .Arn, # ARN
+    .RoleId # ロールID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ロール名|Description|ARN|ロールID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # IDプロバイダ
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## IDプロバイダ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws iam list-saml-providers --region ${REGION_LIST} | jq -r '.SAMLProviderList[] |
+  [
+    (.Arn | split("/") | .[-1]), # プロバイダ
+    "SAML", # タイプ
+    .Arn # ARN
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  aws iam list-open-id-connect-providers --region ${REGION_LIST} | jq -r '.OpenIDConnectProviderList[] |
+  [
+    (.Arn | split("/") | .[-1]), # プロバイダ
+    "OpenID Connect", # タイプ
+    .Arn # ARN
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|プロバイダ|タイプ|ARN|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

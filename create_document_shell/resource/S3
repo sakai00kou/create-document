@@ -1,0 +1,106 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# S3情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# S3" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## バケット (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  S3LIST=$(aws s3api list-buckets --region ${REGION_LIST} | jq -r '.Buckets[] .Name' | sort)
+  for S3BUCKET in ${S3LIST}
+  do
+    LOCATION=$(aws s3api get-bucket-location --region ${REGION_LIST} --bucket ${S3BUCKET} | jq -r '
+      [
+        .LocationConstraint
+      ] | @tsv')
+    STATUS=$(aws s3api get-bucket-versioning --region ${REGION_LIST} --bucket ${S3BUCKET} | jq -r '
+      [
+        .Status
+      ] | @tsv')
+    if [ -z "${STATUS}" ]; then
+      STATUS="-"
+    fi
+    PUBLICBLOCK=$(aws s3api get-public-access-block --region ${REGION_LIST} --bucket ${S3BUCKET} | jq -r '.PublicAccessBlockConfiguration |
+      [
+        if has("BlockPublicAcls") then .BlockPublicAcls else "false" end,
+        if has("IgnorePublicAcls") then .IgnorePublicAcls else "false" end,
+        if has("BlockPublicPolicy") then .BlockPublicPolicy else "false" end,
+        if has("RestrictPublicBuckets") then .RestrictPublicBuckets else "false" end
+      ] | @tsv')
+    OWNERSHIP=$(aws s3api get-bucket-ownership-controls --region ${REGION_LIST} --bucket ${S3BUCKET} 2>/dev/null | jq -r '.OwnershipControls.Rules[] |
+      [
+        .ObjectOwnership
+      ] | @tsv')
+    if [ -z "${OWNERSHIP}" ]; then
+      OWNERSHIP="-"
+    fi
+    LIFECYCLE=$(aws s3api get-bucket-lifecycle-configuration --region ${REGION_LIST} --bucket ${S3BUCKET} 2>/dev/null | jq -r '.Rules[] |
+      [
+        .ID,
+        .Status,
+        .Expiration.Days,
+        (.NoncurrentVersionExpiration | .NoncurrentDays, .NewerNoncurrentVersions),
+        .AbortIncompleteMultipartUpload.DaysAfterInitiation
+      ] | @tsv')
+    if [ -z "${LIFECYCLE}" ]; then
+      LIFECYCLE="-\t-\t-\t-\t-\t-"
+    fi
+    echo -n -e "${S3BUCKET}|${LOCATION}|${STATUS}|${PUBLICBLOCK}|${OWNERSHIP}|${LIFECYCLE}\n" | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+  done
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|バケット名|AWSリージョン|バージョニング|新ACLブロック|任意ACLブロック|新パブリックバケットポリシーブロック|任意パブリックバケットポリシーブロック|オブジェクト所有者|ライフサイクルルール名|ライフサイクルルールステータス|オブジェクト有効期限|最新バージョンでなくなる日数|保持バージョン数|マルチパートアップロード削除|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  #echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

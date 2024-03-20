@@ -1,0 +1,165 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# ECS情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+CLUSTER_TMP=".cluster.tmp"
+SERVICE_TMP=".service.tmp"
+TASK_TMP=".task.tmp"
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# ECS" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## ECS Cluster (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ecs list-clusters --region ${REGION_LIST} | jq -r '.clusterArns[] |
+  [
+    (. // "-" | split("/") | .[-1]) # クラスタ名
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|クラスタ名|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # サービス
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # クラスター名取得
+  aws ecs list-clusters --region ${REGION_LIST} | jq -r '.clusterArns[] | [. // "-" | split("/") | .[-1]] | @tsv' | sort >| ${CLUSTER_TMP}
+
+  while read CLUSTER_LIST
+  do
+    # サービス名取得
+    aws ecs list-services --cluster ${CLUSTER_LIST} --region ${REGION_LIST} | jq -r '.serviceArns[] | [(. // "-" | split("/") | .[-1])] | @tsv' | sort >| ${SERVICE_TMP}
+
+    while read SERVICE_LIST
+    do
+      # リージョンごとの表題【編集可】
+      echo "### ${CLUSTER_LIST} サービス (${REGION_LIST})" >> ${OUTPUT_PATH}
+      echo "" >> ${OUTPUT_PATH}
+
+      # 項目行の行数カウント処理
+      ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+      # リソースリスト取得【編集可】
+      aws ecs describe-services --service ${SERVICE_LIST} --cluster ${CLUSTER_LIST} --region ${REGION_LIST} | jq -r '.services[] |
+      [
+        .serviceName, # サービス名
+        (.loadBalancers[].containerPort // "-"),# コンテナポート
+        .platformVersion, # プラットフォームバージョン
+        .platformFamily, # プラットフォームファミリー
+        .status, # ステータス
+        .serviceArn # ARN
+      ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+      # 項目行とMarkdown形式の表の書式行追加【編集可】
+      sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|サービス名|ポート|バージョン|ファミリー|ステータス|ARN|\n/" ${OUTPUT_PATH}
+      sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+      # 改行【編集可】
+      echo "" >> ${OUTPUT_PATH}
+
+      # セクション数変数のインクリメント
+      ITEMS=$((${ITEMS}+1))
+
+      # -----------------------------------------------------------------------------
+      # タスク
+      # -----------------------------------------------------------------------------
+      aws ecs list-tasks --cluster ${CLUSTER_LIST} --service-name ${SERVICE_LIST} --region ${REGION_LIST} | jq -r '.taskArns[] | [(. // "-" | split("/") | .[-1])] | @tsv' | sort >| ${TASK_TMP}
+
+      # リージョンごとの表題【編集可】
+      echo "### ${CLUSTER_LIST} タスク (${REGION_LIST})" >> ${OUTPUT_PATH}
+      echo "" >> ${OUTPUT_PATH}
+
+      # セクション数変数のインクリメント
+      ITEMS=$((${ITEMS}+1))
+
+      # 項目行の行数カウント処理
+      ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+      while read TASK_LIST
+      do
+        # リソースリスト取得【編集可】
+        aws ecs describe-tasks --cluster ${CLUSTER_LIST} --tasks ${TASK_LIST} --region ${REGION_LIST} | jq -r '.tasks[] |
+        [
+          .attachments[].id, # タスクID
+          .lastStatus, # ステータス
+          (.taskDefinitionArn | split("/") | .[-1]), # タスク定義
+          .startedAt, # 開始時刻
+          .cpu, # CPU
+          .memory, # メモリ
+          .availabilityZone # ゾーン
+        ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+      done < ${TASK_TMP}
+
+      # 項目行とMarkdown形式の表の書式行追加【編集可】
+      sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|タスク|ステータス|タスク定義|開始時刻|CPU|メモリ|AZ|\n/" ${OUTPUT_PATH}
+      sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+      # 項目行の行数カウント処理
+      ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+      # 改行【編集可】
+      echo "" >> ${OUTPUT_PATH}
+
+    done < ${SERVICE_TMP}
+
+  done < ${CLUSTER_TMP}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${CLUSTER_TMP}
+rm -f ${SERVICE_TMP}
+rm -f ${TASK_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi
+

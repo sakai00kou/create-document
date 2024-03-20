@@ -1,0 +1,384 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# AWS WAF情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# WEBACL_TMP      ：WebACLリスト作成用tmpファイル
+# REGEX_TMP       ：RegexPatternSetリスト作成用tmpファイル
+# IPSET_TMP       ：IPSetリスト作成用tmpファイル
+# RULEGROUP_TMP   ：RuleGroupリスト作成用tmpファイル
+# IP_ADDRESS_LIST ：IPアドレスの対象が記載されたJSONファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="us-east-1,ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+WEBACL_TMP=.WebACL.tmp
+REGEX_TMP=.RegexPatternSet.tmp
+IPSET_TMP=.IPSet.tmp
+RULEGROUP_TMP=.RuleGroup.tmp
+IP_ADDRESS_LIST="ip_addresses.json"
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# AWS WAF" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # スコープ設定
+  if [ ${REGION_LIST} == "us-east-1" ]; then
+    SCOPE="CLOUDFRONT"
+  else
+    SCOPE="REGIONAL"
+  fi
+
+  # リージョンごとの表題【編集可】
+  echo "## WebACLs (${SCOPE})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws wafv2 list-web-acls --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.WebACLs[] |
+  [
+    .Name, # 名前
+    .Description, # Description
+    .Id # ID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Description|ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # WebACL
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # WebACL名とIDリスト作成
+  aws wafv2 list-web-acls --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.WebACLs[] | [.Name, .Id] | @tsv' | sort >| ${WEBACL_TMP}
+
+  while read WEBACL_LIST
+  do
+    # WebACL名、ID取得
+    WEBACL_NAME=$(echo ${WEBACL_LIST} | cut -d" " -f 1)
+    WEBACL_ID=$(echo ${WEBACL_LIST} | cut -d" " -f 2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${WEBACL_NAME} (${SCOPE})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws wafv2 get-web-acl --name=${WEBACL_NAME} --id=${WEBACL_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.WebACL.Rules[] |
+    [
+      .Priority, # プライオリティ
+      .Name, # WebACLルール名
+      .Statement.ManagedRuleGroupStatement.VendorName // "Custom" # ルール管理
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|プライオリティ|名前|管理|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${WEBACL_TMP}
+
+  # -----------------------------------------------------------------------------
+  # Regex pattern sets
+  # -----------------------------------------------------------------------------
+  # リージョンごとの表題【編集可】
+  echo "## Regex pattern sets (${SCOPE})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws wafv2 list-regex-pattern-sets --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RegexPatternSets[] |
+  [
+    .Name, # 名前
+    .Description, # Description
+    .Id # ID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Description|ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # Regex pattern sets詳細
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # Regex名とIDリスト作成
+  aws wafv2 list-regex-pattern-sets --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RegexPatternSets[] | [.Name, .Id] | @tsv' | sort >| ${REGEX_TMP}
+
+  while read REGEX_LIST
+  do
+    # IP set名、ID取得
+    REGEX_NAME=$(echo ${REGEX_LIST} | cut -d" " -f 1)
+    REGEX_ID=$(echo ${REGEX_LIST} | cut -d" " -f 2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${REGEX_NAME} (${SCOPE})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws wafv2 get-regex-pattern-set --name=${REGEX_NAME} --id=${REGEX_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RegexPatternSet.RegularExpressionList[] |
+    [
+      "`" + .RegexString + "`" # 正規表現パターンの前後にバッククォートを追加
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|正規表現パターン|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${REGEX_TMP}
+
+  # -----------------------------------------------------------------------------
+  # IP sets
+  # -----------------------------------------------------------------------------
+  # リージョンごとの表題【編集可】
+  echo "## IP sets (${SCOPE})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws wafv2 list-ip-sets --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.IPSets[] |
+  [
+    .Name, # 名前
+    .Description, # Description
+    .Id # ID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Description|ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # IP sets詳細
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # IP set名とIDリスト作成
+  aws wafv2 list-ip-sets --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.IPSets[] | [.Name, .Id] | @tsv' | sort >| ${IPSET_TMP}
+
+  while read IPSET_LIST
+  do
+    # IP set名、ID取得
+    IPSET_NAME=$(echo ${IPSET_LIST} | cut -d" " -f 1)
+    IPSET_ID=$(echo ${IPSET_LIST} | cut -d" " -f 2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${IPSET_NAME} (${SCOPE})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    # 備考無し版コマンド
+    #aws wafv2 get-ip-set --name=${IPSET_NAME} --id=${IPSET_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.IPSet.Addresses[] |
+    #[
+    #  . # IPアドレス
+    #] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+    aws wafv2 get-ip-set --name=${IPSET_NAME} --id=${IPSET_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq --argfile ip_addresses ${IP_ADDRESS_LIST} -r '.IPSet.Addresses[] |
+    [
+      ., # IPアドレス
+      ($ip_addresses[.] // "-") # description、合致するキーがない場合は"-"
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|IPアドレス|備考|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${IPSET_TMP}
+
+  # -----------------------------------------------------------------------------
+  # ルールグループ
+  # -----------------------------------------------------------------------------
+  # リージョンごとの表題【編集可】
+  echo "## Rule Groups (${SCOPE})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws wafv2 list-rule-groups --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RuleGroups[] |
+  [
+    .Name, # 名前
+    .Description, # Description
+    .Id # ID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Description|ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # ルールグループ詳細
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # ルールグループ名とIDリスト作成
+  aws wafv2 list-rule-groups --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RuleGroups[] | [.Name, .Id] | @tsv' | sort >| ${RULEGROUP_TMP}
+
+  while read RULEGROUP_LIST
+  do
+    # ルールグループ名、ID取得
+    RULEGROUP_NAME=$(echo ${RULEGROUP_LIST} | cut -d" " -f 1)
+    RULEGROUP_ID=$(echo ${RULEGROUP_LIST} | cut -d" " -f 2)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${RULEGROUP_NAME} 詳細 (${SCOPE})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws wafv2 get-rule-group --name=${RULEGROUP_NAME} --id=${RULEGROUP_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RuleGroup |
+    [
+      .Name, # ルールグループ名
+      .Capacity, # Capacity
+      .Description, # Description
+      # LabelNamespace
+      (
+        if (.LabelNamespace | split(":") | .[-1]) | length > 0 then
+          .
+        else
+          "-"
+        end
+      )
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ルールグループ名|Capacity|説明|ラベル|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # -----------------------------------------------------------------------------
+    # ルール
+    # -----------------------------------------------------------------------------
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+    # リージョンごとの表題【編集可】
+    echo "### ${RULEGROUP_NAME} ルール (${SCOPE})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws wafv2 get-rule-group --name=${RULEGROUP_NAME} --id=${RULEGROUP_ID} --scope=${SCOPE} --region=${REGION_LIST} | jq -r '.RuleGroup.Rules[] |
+    [
+      .Name, # ルール名
+      (
+        if .Action | contains({"Allow": {}}) then
+          "Allow"
+        elif .Action | contains({"Block": {}}) then
+          "Block"
+        elif .Action | contains({"Count": {}}) then
+          "Count"
+        else
+          "-"
+        end
+      ),
+      .Priority # Priority
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ルール名|Action|Priority|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${RULEGROUP_TMP}
+
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${WEBACL_TMP}
+rm -f ${REGEX_TMP}
+rm -f ${IPSET_TMP}
+rm -f ${RULEGROUP_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

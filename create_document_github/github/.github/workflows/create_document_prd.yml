@@ -1,0 +1,80 @@
+# =========================================================
+#
+# パラメータ一覧＆GitHub Pages作成 GitHub Actions
+#
+# シェル内で指定している変数以外にも、以下の変数を設定すること。
+# Environment secrets
+#   AWS_IAM_ROLE_ARN="AWS側でOIDCを受け付けるIAMロールのARN"
+# Environment variables
+#   BASIS_NAME="基盤名（一覧格納先ディレクトリ名等に使用）"
+# Repository variables
+#   GH_PAGES_URL="GitHub PagesのURL"
+# =========================================================
+name: "Production Create Document"
+
+on:
+  schedule:
+    - cron: '20 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  CREATE_DOCUMENT_SHELL_NAME: "create_document.sh"
+  CREATE_CONTENTS_SHELL_NAME: "contents.sh"
+  RESOURCE_LIST_DIR: "resource_list"
+  AWS_REGION: ap-northeast-1
+  PROJ_NAME: "TestProject"
+  ENVIRONMENT_NAME: "prd"
+
+defaults:
+  run:
+    shell: bash
+    working-directory: "./"
+
+jobs:
+  create_document:
+    strategy:
+      matrix:
+        basis_env_name:
+          - "system1_prd"
+          # 複数の環境を指定する場合は以下のように記述する
+          # - "system2_prd"
+          # - "system3_prd"
+    name: "${{ matrix.basis_env_name }} Create Document"
+    environment: ${{ matrix.basis_env_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Configure AWS credential
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+      - name: Create Document
+        run: |
+          while read RESOURCE
+          do
+            ./${{ env.CREATE_DOCUMENT_SHELL_NAME }} -o "docs/${{ vars.BASIS_NAME }}/${{ env.ENVIRONMENT_NAME }}" ${RESOURCE}
+          done < ${{ env.RESOURCE_LIST_DIR }}/${{ vars.BASIS_NAME }}_list
+      - name: Create Index
+        run: |
+          ./${{ env.CREATE_CONTENTS_SHELL_NAME }} ${{ vars.BASIS_NAME }} ${{ env.ENVIRONMENT_NAME }} ${{ vars.GH_PAGES_URL }} ${{ env.PROJ_NAME }}
+      - name: Count changes
+        id: changes
+        run: |
+          git add -N .
+          echo "count=$(git diff --name-only | wc -l)" >> $GITHUB_OUTPUT
+      - name: Commit & Push
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git fetch
+          git merge
+          git add .
+          git commit -m "GitHub Actions $(TZ=Asia/Tokyo date '+%Y/%m/%d %H:%M:%S')"
+          git push
+        if: steps.changes.outputs.count > 0

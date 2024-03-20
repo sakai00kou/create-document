@@ -1,0 +1,144 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# Transit Gateway情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# Transit Gateway
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# Transit Gateway" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## Transit Gateway (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-transit-gateways --region ${REGION_LIST} | jq -r '.TransitGateways[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .TransitGatewayId, # Transit Gateway ID
+    .OwnerId, # 所有者ID
+    .State, # ステータス
+    .Options.AmazonSideAsn, # Amazon ASN
+    .Options.AssociationDefaultRouteTableId, # 関連付けルートテーブルID
+    .Options.PropagationDefaultRouteTableId, # 伝播ルートテーブルID
+    .Options.MulticastSupport, # マルチキャストサポート
+    .Options.DnsSupport, # DNSサポート
+    .Options.AutoAcceptSharedAttachments, # 共有アタッチメントを自動承諾
+    .Options.VpnEcmpSupport # VPN ECMPサポート
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Transit Gateway ID|所有者ID|ステータス|Amazon ASN|関連付けルートテーブルID|伝播ルートテーブルID|マルチキャストサポート|DNSサポート|共有アタッチメントを自動承諾|VPN ECMPサポート|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+# -----------------------------------------------------------------------------
+# Transit Gatewayアタッチメント
+# -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## Transit Gatewayアタッチメント (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-transit-gateway-attachments --region ${REGION_LIST} | jq -r '.TransitGatewayAttachments[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .TransitGatewayAttachmentId, # Transit GatewayアタッチメントID
+    .TransitGatewayId, # Transit Gateway ID
+    .ResourceType, # リソースタイプ
+    .ResourceId, # リソースID
+    .State, # ステータス
+    .Association.TransitGatewayRouteTableId, # 関連付けルートテーブルID
+    .Association.State, # 関連付けの状態
+    .ResourceOwnerId # リソース所有者ID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Transit GatewayアタッチメントID|Transit Gateway ID|リソースタイプ|リソースID|ステータス|関連付けルートテーブルID|関連付けの状態|リソース所有者ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+# -----------------------------------------------------------------------------
+# Transit Gatewayルートテーブル
+# -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## Transit Gatewayルートテーブル (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-transit-gateway-attachments --region ${REGION_LIST} | jq -r '.TransitGatewayRouteTables[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .TransitGatewayRouteTableId, # Transit GatewayルートテーブルID
+    .TransitGatewayId, # Transit Gateway ID
+    .State, # ステータス
+    .DefaultAssociationRouteTable, # デフォルト関連付けルートテーブル
+    .DefaultPropagationRouteTable # デフォルト伝播ルートテーブル
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Transit GatewayルートテーブルID|Transit Gateway ID|ステータス|デフォルト関連付けルートテーブル|デフォルト伝播ルートテーブル|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

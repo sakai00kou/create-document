@@ -1,0 +1,223 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# VPC情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# VPC" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## VPC (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-vpcs --region ${REGION_LIST} | jq -r '.Vpcs[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .VpcId, # VPC ID
+    .CidrBlock # CIDRブロック
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|VPC ID|CIDRブロック|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # サブネット
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # リージョンごとの表題【編集可】
+  echo "## Subnet (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-subnets --region ${REGION_LIST} | jq -r '.Subnets[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .SubnetId, # サブネットID
+    .VpcId, # VPC ID
+    .CidrBlock, # CIDRブロック
+    .AvailabilityZone # AZ
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|サブネットID|VPC ID|CIDRブロック|AZ|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # VPCエンドポイント
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # リージョンごとの表題【編集可】
+  echo "## VPC Endpoint (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-vpc-endpoints --region ${REGION_LIST} | jq -r '.VpcEndpoints[] | [
+    (.Tags[]? | select(.Key == "Firewall").Value | split("/") | .[-1]) // "-", # 名前
+    .VpcEndpointId, # VpcEndpointId
+    .VpcId, # VpcId
+    .VpcEndpointType, # VpcEndpointType
+    (.NetworkInterfaceIds | join("<br>")), # NetworkInterfaceIds
+    (.SubnetIds | join("<br>")) # SubnetIds
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|使用サービス|VPCエンドポイントID|VPC ID|エンドポイントタイプ|ネットワークインタフェース|サブネットID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # ルートテーブル
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## RouteTable (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-route-tables --region ${REGION_LIST} | jq -r '.RouteTables[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .RouteTableId, # ルートテーブルID
+    (.Associations | map(.SubnetId // "-") | join("<br>")), # 明示的なサブネットの関連付け
+    (.Routes | map(.DestinationCidrBlock) | join("<br>")), # 送信先
+    (.Routes | map(.GatewayId // .NatGatewayId) | join("<br>")), # ターゲット
+    .VpcId // "-" # VpcId
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|ルートテーブルID|明示的なサブネットの関連付け|送信先|ターゲット|VpcId|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # インターネットゲートウェイ
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## Internet Gateway (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-internet-gateways --region ${REGION_LIST} | jq -r '.InternetGateways[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .InternetGatewayId, # Internet GatewayのID
+    (.Attachments[].VpcId // "-") # アタッチされたVPCのID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|Internet Gateway ID|VPC ID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # NATゲートウェイ
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## NAT Gateway (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws ec2 describe-nat-gateways --region ${REGION_LIST} | jq -r '.NatGateways[] |
+  [
+    (.Tags[]? | select(.Key == "Name").Value) // "-", # 名前
+    .NatGatewayId, # NAT Gateway ID
+    .ConnectivityType, # 接続タイプ
+    .NatGatewayAddresses[].PublicIp, # パブリックIP
+    .NatGatewayAddresses[].PrivateIp, # プライベートIP
+    .NatGatewayAddresses[].NetworkInterfaceId, # ネットワークインタフェースID
+    .VpcId, # VPC ID
+    .SubnetId # サブネットID
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|名前|NAT Gateway ID|接続タイプ|パブリックIP|プライベートIP|ネットワークインタフェースID|VPC ID|サブネットID|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

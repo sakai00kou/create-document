@@ -1,0 +1,243 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# Identity Center情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# IDENTITY_STORE_ID：Identity Store ID
+# GROUP_NAME_LIST_TMP：グループ名リスト作成用tmpファイル
+# USER_NAME_LIST_TMP ：ユーザ名リスト作成用tmpファイル
+# GROUP_LIST_TMP     ：グループリスト作成用tmpファイル
+# PERMISSION_SET_LIST_TMP：Permission Setリスト作成用tmpファイル
+# ACCOUNT_NAME_LIST_TMP：アカウント名リスト作成用tmpファイル
+# ACCOUNT_LIST_TMP：アカウントリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+IDENTITY_STORE_ID=$(aws sso-admin list-instances | jq -r '.Instances[].IdentityStoreId')
+INSTANCE_ARN=$(aws sso-admin list-instances | jq -r '.Instances[].InstanceArn')
+GROUP_NAME_LIST_TMP=".identity_center_group_name.json"
+USER_NAME_LIST_TMP=".identity_center_user_name.json"
+GROUP_LIST_TMP=".identity_center_group_list.json"
+PERMISSION_SET_LIST_TMP=".identity_center_permission_set_list.json"
+PERMISSION_NAME_LIST_TMP=".identity_center_permission_name_list.json"
+ACCOUNT_NAME_LIST_TMP=".identity_center_account_name_list.json"
+ACCOUNT_LIST_TMP=".identity_center_account_list.json"
+
+# -----------------------------------------------------------------------------
+# 【事前処理】
+# -----------------------------------------------------------------------------
+# グループIDとグループ名の紐付けファイルを作成
+aws identitystore list-groups --identity-store-id ${IDENTITY_STORE_ID} | jq -r '.Groups[] | {(.GroupId): .DisplayName}' | jq -s add >| ${GROUP_NAME_LIST_TMP}
+aws identitystore list-users --identity-store-id ${IDENTITY_STORE_ID} | jq -r '.Users[] | {(.UserId): .UserName}' | jq -s add >| ${USER_NAME_LIST_TMP}
+# 許可セットIDと許可セット名の紐付けファイルを作成
+aws sso-admin list-permission-sets --instance-arn ${INSTANCE_ARN} | jq -r '.PermissionSets[]' >| ${PERMISSION_SET_LIST_TMP}
+while read PERMISSION_SET_LIST
+do
+  aws sso-admin describe-permission-set --instance-arn ${INSTANCE_ARN} --permission-set-arn ${PERMISSION_SET_LIST} |  jq -r '[.PermissionSet.PermissionSetArn, .PermissionSet.Name] | "\"\(.[0])\": \"\(.[1])\""' >> ${PERMISSION_NAME_LIST_TMP}
+done < ${PERMISSION_SET_LIST_TMP}
+LINE_COUNT=$(wc -l ${PERMISSION_NAME_LIST_TMP} | awk '{print $1}')
+sed -i ${OVERWRITE_OPTION} -e 's/$/,/g' -e 's/^/  /g' -e "${LINE_COUNT}s/,$/\n}/" -e '1s/^/{\n/g' ${PERMISSION_NAME_LIST_TMP}
+# アカウントIDとアカウント名の紐付けファイルを作成
+aws organizations list-accounts | jq -r '.Accounts[] | {(.Id): .Name}' | jq -s add >| ${ACCOUNT_NAME_LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# AWS Identity Center" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## ユーザ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws identitystore list-users --identity-store-id ${IDENTITY_STORE_ID} --region ${REGION_LIST} | jq -r '.Users[] |
+  [
+    .UserName, # ユーザ名
+    .DisplayName, # 表示名
+    (.Name.FamilyName // "-"), # 性
+    (.Name.GivenName // "-") # 名
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ユーザ名|表示名|性|名|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # グループ
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## グループ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws identitystore list-groups --identity-store-id ${IDENTITY_STORE_ID} --region ${REGION_LIST} | jq -r '.Groups[] |
+  [
+    .DisplayName, # グループ名
+    .Description # 説明
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|グループ名|説明|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # グループメンバー
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## グループメンバー (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # グループ一覧作成
+  aws identitystore list-groups --identity-store-id ${IDENTITY_STORE_ID} --region ${REGION_LIST} | jq -r '.Groups[] | .GroupId' >| ${GROUP_LIST_TMP}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  while read GROUP_LIST
+  do
+    # リソースリスト取得【編集可】
+    aws identitystore list-group-memberships --identity-store-id ${IDENTITY_STORE_ID} --group-id ${GROUP_LIST} --region ${REGION_LIST} | jq --argfile user_name ${USER_NAME_LIST_TMP} --argfile group_name ${GROUP_NAME_LIST_TMP} -r '.GroupMemberships[] |
+    [
+      ($group_name[.GroupId]), # グループ名
+      ($user_name[.MemberId.UserId]) # ユーザ名
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  done < ${GROUP_LIST_TMP}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|グループ名|所属ユーザ名|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # AWSアカウントの許可セット
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## AWSアカウントの許可セット (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # アカウント一覧作成
+  aws organizations list-accounts | jq -r '.Accounts[].Id' >| ${ACCOUNT_LIST_TMP}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  while read ACCOUNT_LIST
+  do
+    # リソースリスト取得【編集可】
+    aws sso-admin list-permission-sets-provisioned-to-account --instance-arn ${INSTANCE_ARN} --account-id ${ACCOUNT_LIST} | jq --argfile permission_name ${PERMISSION_NAME_LIST_TMP} --argfile account_name ${ACCOUNT_NAME_LIST_TMP} --arg account_list "${ACCOUNT_LIST}" -r '.PermissionSets[] |
+    [
+      ($account_name[$account_list]), # アカウント名
+      ($permission_name[.]) # 許可セット名
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  done < ${ACCOUNT_LIST_TMP}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|アカウント名|許可セット名|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # 許可セットがプロビジョニングされているAWSアカウント
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## 許可セットがプロビジョニングされているAWSアカウント (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 許可セット一覧作成
+  #aws sso-admin list-permission-sets --instance-arn ${INSTANCE_ARN} >| ${PERMISSION_SET_LIST_TMP}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  while read PERMISSION_SET_LIST
+  do
+    # リソースリスト取得【編集可】
+    aws sso-admin list-accounts-for-provisioned-permission-set --instance-arn ${INSTANCE_ARN} --permission-set-arn ${PERMISSION_SET_LIST}  | jq --argfile permission_name ${PERMISSION_NAME_LIST_TMP} --argfile account_name ${ACCOUNT_NAME_LIST_TMP} --arg permission_list "${PERMISSION_SET_LIST}" -r '.AccountIds[] |
+    [
+      ($permission_name[$permission_list]), # 許可セット名
+      ($account_name[.]) # アカウント名
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  done < ${PERMISSION_SET_LIST_TMP}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|許可セット名|アカウント名|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+rm -f ${GROUP_NAME_LIST_TMP}
+rm -f ${USER_NAME_LIST_TMP}
+rm -f ${GROUP_LIST_TMP}
+rm -f ${PERMISSION_SET_LIST_TMP}
+rm -f ${PERMISSION_NAME_LIST_TMP}
+rm -f ${ACCOUNT_NAME_LIST_TMP}
+rm -f ${ACCOUNT_LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+  rm -f ${PERMISSION_NAME_LIST_TMP}${OVERWRITE_OPTION}
+fi

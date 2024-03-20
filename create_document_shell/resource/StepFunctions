@@ -1,0 +1,99 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# Step Functions情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# Step Functions" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## ステートマシン (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リスト一覧取得用変数の指定【編集可】
+  SFNARN_TMP=".sfnarn.tmp"
+
+  # LoadBalancerArnのリスト作成【編集可】
+  aws stepfunctions list-state-machines --region ${REGION_LIST} | jq -r '.stateMachines[] | [.stateMachineArn] | @tsv' | sort >| ${SFNARN_TMP}
+
+  while read SFNARN_LIST
+  do
+    # # 項目行の行数カウント処理
+    # ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws stepfunctions describe-state-machine --state-machine-arn ${SFNARN_LIST} --region ${REGION_LIST} | jq -r '. |
+    [
+      .name, # ステートマシン名
+      .type, # タイプ
+      .status, # ステータス
+      # ロググループ名
+      ((.loggingConfiguration.destinations[]?.cloudWatchLogsLogGroup.logGroupArn | split(":") | .[-2]) // "-"),
+      # ログレベル
+      (
+        .loggingConfiguration |
+        if . | length > 0 then
+          .level
+        else
+          "-"
+        end
+      ),
+      .loggingConfiguration.includeExecutionData // "-", # 実行データを含める
+      .roleArn # ロールARN
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  done < ${SFNARN_TMP}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ステートマシン名|タイプ|ステータス|ロググループ名|ログレベル|実行データを含める|ロールARN|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  echo "" >> ${OUTPUT_PATH}
+
+  # 作業用tmpファイルの削除
+  rm -f ${SFNARN_TMP}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

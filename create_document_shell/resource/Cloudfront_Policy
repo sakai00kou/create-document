@@ -1,0 +1,216 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# CloudFront Policy情報取得リソースファイル(Mac/Linux用)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="us-east-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# CloudFront" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## キャッシュ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws cloudfront list-cache-policies --region ${REGION_LIST} | jq -r '.CachePolicyList.Items[] |
+  [
+    .Type, # タイプ
+    .CachePolicy.CachePolicyConfig.Name, # キャッシュポリシー名
+    .CachePolicy.CachePolicyConfig.Comment, # 説明
+    .CachePolicy.CachePolicyConfig.MinTTL, # 最小TTL
+    .CachePolicy.CachePolicyConfig.MaxTTL, # 最大TTL
+    .CachePolicy.CachePolicyConfig.DefaultTTL, # デフォルトTTL
+    # キャッシュキーヘッダ
+    (
+      .CachePolicy.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    .CachePolicy.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig.CookieBehavior, # キャッシュキークッキー
+    # キャッシュキークエリ文字列
+    (
+      .CachePolicy.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.QueryStringsConfig.QueryStrings.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    .CachePolicy.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.EnableAcceptEncodingGzip, # Gzipサポート
+    .CachePolicy.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.EnableAcceptEncodingBrotli # Brotliサポート
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|タイプ|キャッシュポリシー名|説明|最小TTL|最大TTL|デフォルトTTL|ヘッダ|Cookie|クエリ文字列|Gzip|Brotli|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # オリジンリクエスト
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## オリジンリクエスト (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws cloudfront list-origin-request-policies --region ${REGION_LIST} | jq -r '.OriginRequestPolicyList.Items[] |
+  [
+    .Type, # タイプ
+    .OriginRequestPolicy.OriginRequestPolicyConfig.Name, # オリジンリクエストポリシー名
+    .OriginRequestPolicy.OriginRequestPolicyConfig.Comment, # 説明
+    # オリジンリクエストヘッダ
+    (
+      .OriginRequestPolicy.OriginRequestPolicyConfig.HeadersConfig.Headers.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    .OriginRequestPolicy.OriginRequestPolicyConfig.CookiesConfig.CookieBehavior, # オリジンリクエストクッキー
+    .OriginRequestPolicy.OriginRequestPolicyConfig.QueryStringsConfig.QueryStringBehavior # オリジンリクエストクエリ文字列
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|タイプ|オリジンリクエストポリシー名|説明|ヘッダ|Cookie|クエリ文字列|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # -----------------------------------------------------------------------------
+  # レスポンスヘッダ
+  # -----------------------------------------------------------------------------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## レスポンスヘッダ (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws cloudfront list-response-headers-policies --region ${REGION_LIST} | jq -r '.ResponseHeadersPolicyList.Items[] |
+  [
+    .Type, # タイプ
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name, # レスポンスヘッダ名
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Comment, # 説明
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowCredentials // "-", # Access-Control-Allow-Credentials
+    # Access-Control-Allow-Headers
+    (
+      .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowHeaders.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    # Access-Control-Allow-Methods
+    (
+      .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowMethods.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    # AccessControlAllowOrigins
+    (
+      .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowOrigins.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    # AccessControlExposeHeaders
+    (
+      .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlExposeHeaders.Items |
+      if type == "array" then
+        map(.) | join("<br>")
+      else
+        . // "-"
+      end
+    ),
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.CorsConfig.AccessControlMaxAge // "-", # AccessControlMaxAge
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.AccessControlMaxAgeSec // "-", # StrictTransportSecurity
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.ContentTypeOptions.Override // "-", # ContentTypeOptions
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.FrameOptions.FrameOption // "-", # FrameOptions
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Protection // "-", # XSSProtection.Protection
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ModeBlock // "-", # XSSProtection.ModeBlock
+    .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.ReferrerPolicy // "-", # ReferrerPolicy
+    (
+      .ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy |
+      if . == {} then
+        "-"
+      elif . == null then
+        "-"
+      else
+        .
+      end
+    )
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|タイプ|レスポンスヘッダ名|説明|Access-Control-Allow-Credentials|Access-Control-Allow-Headers|Access-Control-Allow-Methods|Access-Control-Allow-Origin|Access-Control-Expose-Headers|Access-Control-Max-Age|Strict-Transport-Security|X-Content-Type-Options|X-Frame-Options|X-XSS-Protection_Protection|X-XSS-Protection_Block|Referrer-Policy|Content-Security-Policy|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi

@@ -1,0 +1,171 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# 情報取得リソースファイルテンプレート(Mac/Linux用)
+#
+# 【テンプレート使用方法】
+# コメント行に【編集可】と記載されている箇所を取得したいAWSリソースに合わせて修正する。
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 【環境変数】
+# OS_TYPE         ：OS種別
+# OVERWRITE_OPTION：sedコマンドのオプション
+# ITEMS           ：セクション数のカウント初期化処理
+# ROW_COUNT       ：項目行の行数カウント初期化処理
+# AWS_REGION      ：情報を取得するリージョンの指定【編集可】
+#                   複数リージョンを取得する場合はカンマ（,）で区切る
+# LIST_TMP        ：リージョンリスト作成用tmpファイル
+# -----------------------------------------------------------------------------
+OS_TYPE=$(uname -s)
+if [ ${OS_TYPE} == "Darwin" ]; then
+  OVERWRITE_OPTION=".tmp"
+else
+  OVERWRITE_OPTION=""
+fi
+
+ITEMS="0"
+ROW_COUNT[${ITEMS}]="0"
+AWS_REGION="ap-northeast-1"
+LIST_TMP=.${RESOURCE_NAME}.tmp
+echo ${AWS_REGION} | sed -e "s/ //g" -e "s/,/\n/g" >| ${LIST_TMP}
+
+# -----------------------------------------------------------------------------
+# 【メイン処理】
+# -----------------------------------------------------------------------------
+# タイトル【編集可】
+echo "# Title" >| ${OUTPUT_PATH}
+
+# リージョンごとの情報取得
+while read REGION_LIST
+do
+  # リージョンごとの表題【編集可】
+  echo "## サービス名 (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws rds describe-db-clusters --region ${REGION_LIST} | jq -r '.DBClusters[] |
+  [
+    .DBClusterIdentifier, # DB識別子
+    .Engine, # エンジン
+    .EngineVersion, # エンジンバージョン
+    (.AvailabilityZones | join("<br>")), # リージョンとAZ
+    .DBSubnetGroup, # サブネットグループ
+    .DBClusterParameterGroup, # パラメータグループ
+    (.DBClusterMembers[] | select(.IsClusterWriter == true).DBInstanceIdentifier), # ライターインスタンス
+    ([(.DBClusterMembers[] | select(.IsClusterWriter == false).DBInstanceIdentifier)] | join("<br>")), # リーダーインスタンス
+    .Endpoint, # ライターエンドポイント
+    .ReaderEndpoint # リーダーエンドポイント
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|DB識別子|エンジン|エンジンバージョン|リージョンとAZ|サブネットグループ|パラメータグループ|ライターインスタンス|リーダーインスタンス|ライターエンドポイント|リーダーエンドポイント|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+
+# 同一ファイル内でセクションを複数定義する場合はセクション分以下をコピーする
+# （例：DBクラスタ一覧とDBインスタンス一覧を同じ出力ファイルで表示する場合）
+# 同一ファイル内でセクションを複数定義しない場合は以下を削除する
+# ---------- コピーここから ----------
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # リージョンごとの表題【編集可】
+  echo "## Aurora Instance (${REGION_LIST})" >> ${OUTPUT_PATH}
+  echo "" >> ${OUTPUT_PATH}
+
+  # 項目行の行数カウント処理
+  ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+  # リソースリスト取得【編集可】
+  aws rds describe-db-instances --region ${REGION_LIST} | jq -r '.DBInstances[] |
+  [
+    .DBClusterIdentifier, # DB識別子
+    .Engine, # エンジン
+    .EngineVersion, # エンジンバージョン
+    .AvailabilityZone, # リージョンとAZ
+    .DBInstanceClass, # サイズ
+    .DBSubnetGroup.DBSubnetGroupName, # サブネットグループ
+    .DBParameterGroups[].DBParameterGroupName, # パラメータグループ
+    .Endpoint.Address # エンドポイント
+  ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+  # 項目行とMarkdown形式の表の書式行追加【編集可】
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|DB識別子|エンジン|エンジンバージョン|リージョンとAZ|サイズ|サブネットグループ|パラメータグループ|エンドポイント|\n/" ${OUTPUT_PATH}
+  sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+  # 改行【編集可】
+  echo "" >> ${OUTPUT_PATH}
+# ---------- コピーここまで ----------
+
+# 同一ファイル内でリスト一覧で取得した項目の詳細を出力する場合はセクション分以下をコピーする
+# （例：各ELBの詳細を表示する場合）
+# 同一ファイル内でリスト一覧の項目詳細を出力しない場合は以下を削除する
+# ---------- コピーここから ----------
+# リスト一覧取得用変数の指定【編集可】
+LBARN_TMP=".lbarn.tmp"
+
+  # セクション数変数のインクリメント
+  ITEMS=$((${ITEMS}+1))
+
+  # LoadBalancerArnのリスト作成【編集可】
+  aws elbv2 describe-load-balancers --region ${REGION_LIST} | jq -r '.LoadBalancers[] | [.LoadBalancerArn] | @tsv' | sort >| ${LBARN_TMP}
+
+  while read LBARN_LIST
+  do
+    # ロードバランサ名の取得【編集可】
+    LB_NAME=$(echo ${LBARN_LIST} | cut -d"/" -f3)
+
+    # リージョンごとの表題【編集可】
+    echo "### ${LB_NAME} リスナー (${REGION_LIST})" >> ${OUTPUT_PATH}
+    echo "" >> ${OUTPUT_PATH}
+
+    # 項目行の行数カウント処理
+    ROW_COUNT[${ITEMS}]=$(wc -l ${OUTPUT_PATH} | awk '{print $1}')
+
+    # リソースリスト取得【編集可】
+    aws elbv2 describe-listeners --load-balancer-arn ${LBARN_LIST} --region ${REGION_LIST} | jq -r '.Listeners[] |
+    [
+      (.LoadBalancerArn | split("/") | .[-2]), # ロードバランサ名
+      .Protocol, # プロトコル
+      .Port, # ポート
+      .DefaultActions[].Type, # ターゲットグループアクション
+      (.DefaultActions[].TargetGroupArn // "-" | split("/") | .[-2]), # ターゲットグループ名
+      .SslPolicy // "-", # SSLポリシー
+      .ListenerArn # リスナーARN
+    ] | @tsv' | sort | sed -e "s/\t/|/g" -e "s/^/|/g" -e "s/$/|/g" -e "s/\"//g" >> ${OUTPUT_PATH}
+
+    # 項目行とMarkdown形式の表の書式行追加【編集可】
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+1))s/^/|ロードバランサ名|プロトコル|ポート|ターゲットグループアクション|ターゲットグループ名|セキュリティポリシー|リスナーARN|\n/" ${OUTPUT_PATH}
+    sed -i ${OVERWRITE_OPTION} -e "$((${ROW_COUNT[${ITEMS}]}+2))s/^/|:--|:--|:--|:--|:--|:--|:--|\n/" ${OUTPUT_PATH}
+
+    # 改行【編集可】
+    echo "" >> ${OUTPUT_PATH}
+
+    # セクション数変数のインクリメント
+    ITEMS=$((${ITEMS}+1))
+
+  done < ${LBARN_TMP}
+
+  echo "" >> ${OUTPUT_PATH}
+
+  # 作業用tmpファイルの削除
+  rm -f ${LBARN_TMP}
+# ---------- コピーここまで ----------
+
+  # CSVファイルへの変換処理
+  if [ ${FILETYPE} == "csv" ]; then
+    EXPORT_CSV ${ITEMS} ${OUTPUT_PATH}
+  fi
+
+done < ${LIST_TMP}
+
+# 作業用tmpファイルの削除
+rm -f ${LIST_TMP}
+
+if [ ${OS_TYPE} == Darwin ]; then
+  rm -f ${OUTPUT_PATH}${OVERWRITE_OPTION}
+fi
